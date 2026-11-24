@@ -116,7 +116,15 @@ export async function POST(request: Request) {
       );
     }
 
-    const form = await request.formData();
+    let form: FormData;
+    try {
+      form = await request.formData();
+    } catch {
+      return NextResponse.json(
+        { ok: false, error: "That request did not come from the estimate form. Please use the form on the site or call." },
+        { status: 400 },
+      );
+    }
 
     // Honeypot: real browsers leave this empty because it is visually hidden.
     if (String(form.get("company") ?? "").trim() !== "") {
