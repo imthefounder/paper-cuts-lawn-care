@@ -19,7 +19,7 @@ const body = Inter({
 
 const title = "Paper Cuts Lawn Care | Lawn Mowing & Yard Cleanups in Vandalia, OH";
 const description =
-  "Free estimates on lawn mowing, bush and tree trimming, core aeration, dethatching, leaf clean up, gutter cleaning, flowerbeds, and landscaping in Vandalia, Ohio. Ask for James — (313) 505-1600.";
+  `Free estimates on lawn mowing, bush and tree trimming, core aeration, dethatching, leaf clean up, gutter cleaning, flowerbeds, and landscaping in Vandalia, Ohio. Ask for James — ${SITE.phoneDisplay}.`;
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE.url),
@@ -79,7 +79,7 @@ const jsonLd = {
   name: SITE.name,
   description,
   url: SITE.url,
-  telephone: "+1-313-505-1600",
+  telephone: SITE.phoneHref.replace("tel:", ""),
   email: SITE.email,
   image: `${SITE.url}/opengraph-image`,
   slogan: SITE.tagline,

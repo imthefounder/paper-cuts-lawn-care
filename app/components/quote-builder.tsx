@@ -241,9 +241,9 @@ export function QuoteBuilder() {
               </>
             ) : (
               <>
-                Your details are filled in and ready. The site cannot email them
-                automatically yet, so use one of the buttons below and it lands
-                in {SITE.owner}&rsquo;s phone or inbox in one tap.
+                Your details are filled in and ready. The automatic text did not
+                go through, so use one of the buttons below and it lands in{" "}
+                {SITE.owner}&rsquo;s phone or inbox in one tap.
               </>
             )}
           </p>
@@ -252,7 +252,7 @@ export function QuoteBuilder() {
             <div className="mt-6 grid gap-2.5 text-left">
               <a href={smsLink} className="btn-grass w-full">
                 <MessageSquare className="h-4 w-4" aria-hidden strokeWidth={2.6} />
-                Text it to {SITE.owner}
+                Text it to {SITE.owner} at {SITE.phoneDisplay}
               </a>
               <a href={mailtoLink} className="btn-ghost w-full">
                 <Mail className="h-4 w-4" aria-hidden strokeWidth={2.6} />

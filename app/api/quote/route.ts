@@ -45,6 +45,16 @@ function digits(value: string): string {
   return value.replace(/\D/g, "");
 }
 
+/** E.164 for US/CA numbers: +1XXXXXXXXXX. Numbers already in +CC form pass through. */
+function toE164(value: string): string {
+  const raw = value.trim();
+  const d = digits(raw);
+  if (raw.startsWith("+")) return `+${d}`;
+  if (d.length === 10) return `+1${d}`;
+  if (d.length === 11 && d.startsWith("1")) return `+${d}`;
+  return `+${d}`;
+}
+
 type Lead = {
   name: string;
   phone: string;
@@ -54,6 +64,76 @@ type Lead = {
   promo: boolean;
   photos: File[];
 };
+
+type Channel = {
+  status: "sent" | "not_configured" | "failed";
+  detail?: string;
+};
+
+/** The phone that receives every quote request as a text. */
+const SMS_TARGET = toE164(process.env.QUOTE_TO_SMS || SITE.smsNumber);
+
+function smsBody(lead: Lead): string {
+  const notes = lead.notes ? lead.notes.replace(/\s+/g, " ").slice(0, 220) : "none";
+  return [
+    "PAPER CUTS - NEW ESTIMATE REQUEST (text message)",
+    `${lead.name} - ${lead.phone}`,
+    lead.address,
+    `Services: ${lead.services.join(", ")}`,
+    `Notes: ${notes}`,
+    lead.promo ? "$5 door hanger: YES" : "$5 door hanger: no",
+    lead.photos.length
+      ? `Photos: ${lead.photos.length} on the online form (${SITE.url})`
+      : "",
+    `Reply to ${lead.phone} with the estimate.`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+/**
+ * Twilio REST over plain fetch - no SDK, no extra bundle weight.
+ * Works with a single Twilio/toll-free From number or a Messaging Service SID.
+ */
+async function sendSms(lead: Lead): Promise<Channel> {
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  const from = process.env.TWILIO_FROM_NUMBER;
+  const serviceSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
+
+  if (!sid || !token || (!from && !serviceSid)) return { status: "not_configured" };
+
+  const body = new URLSearchParams({ To: SMS_TARGET, Body: smsBody(lead) });
+  if (serviceSid) body.set("MessagingServiceSid", serviceSid);
+  else body.set("From", toE164(String(from)));
+
+  try {
+    const res = await fetch(
+      `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Basic ${Buffer.from(`${sid}:${token}`).toString("base64")}`,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: body.toString(),
+      },
+    );
+
+    if (!res.ok) {
+      const detail = await res.text();
+      console.error("[paper-cuts:twilio]", res.status, detail.slice(0, 500));
+      return { status: "failed", detail: `twilio_${res.status}` };
+    }
+
+    const data = (await res.json().catch(() => ({}))) as { sid?: string; status?: string };
+    console.log("[paper-cuts:twilio]", SMS_TARGET, data.sid ?? "", data.status ?? "");
+    return { status: "sent" };
+  } catch (err) {
+    console.error("[paper-cuts:twilio]", err);
+    return { status: "failed", detail: "twilio_unreachable" };
+  }
+}
 
 function emailHtml(lead: Lead): string {
   const rows = lead.services
@@ -101,6 +181,54 @@ function emailText(lead: Lead): string {
     "Services:",
     ...lead.services.map((name) => ` - ${name}`),
   ].join("\n");
+}
+
+async function sendEmail(lead: Lead): Promise<Channel> {
+  const apiKey = process.env.RESEND_API_KEY;
+  const to = process.env.QUOTE_TO_EMAIL || SITE.email;
+  const from = process.env.QUOTE_FROM_EMAIL || "Paper Cuts Lawn Care <onboarding@resend.dev>";
+
+  if (!apiKey) return { status: "not_configured" };
+
+  const attachments = await Promise.all(
+    lead.photos.map(async (file) => ({
+      filename: file.name || "yard-photo.jpg",
+      content: Buffer.from(await file.arrayBuffer()).toString("base64"),
+    })),
+  );
+
+  try {
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from,
+        to: [to],
+        subject: `New estimate request: ${lead.name} (${lead.address})${
+          lead.photos.length
+            ? ` [${lead.photos.length} photo${lead.photos.length === 1 ? "" : "s"}]`
+            : ""
+        }`,
+        html: emailHtml(lead),
+        text: emailText(lead),
+        attachments,
+      }),
+    });
+
+    if (!res.ok) {
+      const detail = await res.text();
+      console.error("[paper-cuts:resend]", res.status, detail.slice(0, 500));
+      return { status: "failed", detail: `resend_${res.status}` };
+    }
+
+    return { status: "sent" };
+  } catch (err) {
+    console.error("[paper-cuts:resend]", err);
+    return { status: "failed", detail: "resend_unreachable" };
+  }
 }
 
 export async function POST(request: Request) {
@@ -192,63 +320,36 @@ export async function POST(request: Request) {
         services,
         promo,
         photos: photos.length,
+        smsTo: SMS_TARGET,
       }),
     );
 
-    const apiKey = process.env.RESEND_API_KEY;
-    const to = process.env.QUOTE_TO_EMAIL || SITE.email;
-    const from =
-      process.env.QUOTE_FROM_EMAIL || "Paper Cuts Lawn Care <onboarding@resend.dev>";
+    // Text first (James reads texts on the job), email second (carries the photos).
+    const [sms, email] = await Promise.all([sendSms(lead), sendEmail(lead)]);
+    console.log("[paper-cuts:delivery]", JSON.stringify({ sms, email }));
 
-    if (!apiKey) {
+    const delivered = sms.status === "sent" || email.status === "sent";
+
+    if (!delivered) {
       return NextResponse.json(
         {
           ok: true,
           delivered: false,
-          reason: "mailer_not_configured",
+          reason:
+            sms.status === "failed" || email.status === "failed"
+              ? "delivery_failed"
+              : "channels_not_configured",
+          sms: sms.status,
+          email: email.status,
         },
         { status: 200 },
       );
     }
 
-    const attachments = await Promise.all(
-      photos.map(async (file) => ({
-        filename: file.name || "yard-photo.jpg",
-        content: Buffer.from(await file.arrayBuffer()).toString("base64"),
-      })),
+    return NextResponse.json(
+      { ok: true, delivered: true, sms: sms.status, email: email.status },
+      { status: 200 },
     );
-
-    const res = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        from,
-        to: [to],
-        subject: `New estimate request: ${name} (${address})${
-          photos.length ? ` [${photos.length} photo${photos.length === 1 ? "" : "s"}]` : ""
-        }`,
-        html: emailHtml(lead),
-        text: emailText(lead),
-        attachments,
-      }),
-    });
-
-    if (!res.ok) {
-      const detail = await res.text();
-      console.error("[paper-cuts:resend]", res.status, detail.slice(0, 500));
-      return NextResponse.json(
-        {
-          ok: false,
-          error: `Could not send the request right now. Please call ${SITE.phoneDisplay}.`,
-        },
-        { status: 502 },
-      );
-    }
-
-    return NextResponse.json({ ok: true, delivered: true }, { status: 200 });
   } catch (err) {
     console.error("[paper-cuts:quote]", err);
     return NextResponse.json(
