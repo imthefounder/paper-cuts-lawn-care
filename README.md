@@ -13,17 +13,23 @@ npm run build    # production build
 
 ## Lead delivery
 
-The estimate form posts multipart form data to `/api/quote`. Every lead is texted
-to the owner's phone **(937) 280-5772** through Twilio; email is the secondary
-channel that carries the yard photos.
+The estimate form posts multipart form data to `/api/quote`. Email is the live
+channel today; the SMS path is coded and dormant until a Twilio sender number is
+purchased and registered with the carriers.
 
-* `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` and `TWILIO_FROM_NUMBER` (or
-  `TWILIO_MESSAGING_SERVICE_SID`) set -> the route sends the lead as a real SMS
-  to `QUOTE_TO_SMS` (defaults to the number in `lib/site.ts`) and returns
-  `{ delivered: true, sms: "sent" }`.
-* `RESEND_API_KEY` set -> the same lead is also emailed, with up to 3 compressed
-  yard photos attached, to `QUOTE_TO_EMAIL`.
-* If neither channel is configured or both fail, nothing is silently dropped: the
+* `GMAIL_USER` + `GMAIL_APP_PASSWORD` set -> the route emails the request (with up
+  to 3 compressed yard photos attached) to `QUOTE_TO_EMAIL` and returns
+  `{ delivered: true, email: "sent", via: "gmail" }`. Gmail needs 2-Step
+  Verification and an app password from myaccount.google.com/apppasswords.
+* `RESEND_API_KEY` set -> the same email goes out through Resend instead
+  (`via: "resend"`). Resend is tried first, Gmail is the fallback.
+* `TWILIO_ACCOUNT_SID` + `TWILIO_AUTH_TOKEN` + `TWILIO_FROM_NUMBER` (or
+  `TWILIO_MESSAGING_SERVICE_SID`) set -> every lead is ALSO texted to
+  `QUOTE_TO_SMS` (`(937) 280-5772`). This needs a Twilio number with SMS
+  capability **and** carrier registration: A2P 10DLC brand + campaign for a US
+  long code, or toll-free verification for an 8xx. Trial accounts can only text
+  numbers verified in the console, and a $0.00 balance cannot buy a number.
+* If every channel is unconfigured or fails, nothing is silently dropped: the
   route logs the lead to the Vercel function logs and returns
   `{ delivered: false }`. The UI then shows a one-tap "Text it to James" /
   "Email it to James" panel with the request already written out.
@@ -32,23 +38,18 @@ Set these in Vercel -> Project -> Settings -> Environment Variables:
 
 | Name | Value |
 | --- | --- |
-| `TWILIO_ACCOUNT_SID` | from [console.twilio.com](https://console.twilio.com) |
-| `TWILIO_AUTH_TOKEN` | from the Twilio console |
-| `TWILIO_FROM_NUMBER` | the Twilio number (or toll-free) texts are sent FROM, E.164 `+1XXXXXXXXXX` |
-| `TWILIO_MESSAGING_SERVICE_SID` | optional, replaces `TWILIO_FROM_NUMBER` |
-| `QUOTE_TO_SMS` | `+19372805772` (default; the lead destination) |
-| `RESEND_API_KEY` | optional, from [resend.com](https://resend.com) (free tier) |
+| `GMAIL_USER` | the Google account that sends the leads |
+| `GMAIL_APP_PASSWORD` | 16-character Google app password (never the account password) |
+| `RESEND_API_KEY` | optional alternative sender, from [resend.com](https://resend.com) |
 | `QUOTE_TO_EMAIL` | `papercutslawn@gmail.com` |
 | `QUOTE_FROM_EMAIL` | `Paper Cuts Lawn Care <onboarding@resend.dev>` until a domain is verified |
-
-US carriers require A2P 10DLC registration for application-to-person traffic: buy
-or register a 10DLC brand/campaign in the Twilio console (toll-free numbers need
-verification instead). Twilio trial accounts can only text numbers verified in the
-console, so verify `+19372805772` before the first live lead.
+| `QUOTE_TO_SMS` | `+19372805772` (only used once Twilio is configured) |
+| `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` / `TWILIO_FROM_NUMBER` | dormant SMS path |
 
 Resend's free tier only sends to the address that owns the account, so sign up
 with `papercutslawn@gmail.com` or verify `papercutslawncare.com` and switch
-`QUOTE_FROM_EMAIL` to `quotes@papercutslawncare.com`.
+`QUOTE_FROM_EMAIL` to `quotes@papercutslawncare.com` — the Gmail app-password path
+has no such restriction.
 
 ## Content source
 

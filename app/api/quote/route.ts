@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import nodemailer from "nodemailer";
 import { SERVICE_LOOKUP } from "@/lib/services";
 import { SITE } from "@/lib/site";
 
@@ -67,10 +68,11 @@ type Lead = {
 
 type Channel = {
   status: "sent" | "not_configured" | "failed";
+  via?: string;
   detail?: string;
 };
 
-/** The phone that receives every quote request as a text. */
+/** The phone that would receive every quote request as a text, once a sender number exists. */
 const SMS_TARGET = toE164(process.env.QUOTE_TO_SMS || SITE.smsNumber);
 
 function smsBody(lead: Lead): string {
@@ -93,7 +95,9 @@ function smsBody(lead: Lead): string {
 
 /**
  * Twilio REST over plain fetch - no SDK, no extra bundle weight.
- * Works with a single Twilio/toll-free From number or a Messaging Service SID.
+ * Dormant until TWILIO_FROM_NUMBER (or a Messaging Service SID) exists: a US
+ * sender number plus A2P 10DLC / toll-free verification is required before any
+ * carrier will deliver the message.
  */
 async function sendSms(lead: Lead): Promise<Channel> {
   const sid = process.env.TWILIO_ACCOUNT_SID;
@@ -101,7 +105,7 @@ async function sendSms(lead: Lead): Promise<Channel> {
   const from = process.env.TWILIO_FROM_NUMBER;
   const serviceSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
 
-  if (!sid || !token || (!from && !serviceSid)) return { status: "not_configured" };
+  if (!sid || !token || (!from && !serviceSid)) return { status: "not_configured", via: "twilio" };
 
   const body = new URLSearchParams({ To: SMS_TARGET, Body: smsBody(lead) });
   if (serviceSid) body.set("MessagingServiceSid", serviceSid);
@@ -123,15 +127,15 @@ async function sendSms(lead: Lead): Promise<Channel> {
     if (!res.ok) {
       const detail = await res.text();
       console.error("[paper-cuts:twilio]", res.status, detail.slice(0, 500));
-      return { status: "failed", detail: `twilio_${res.status}` };
+      return { status: "failed", via: "twilio", detail: `twilio_${res.status}` };
     }
 
     const data = (await res.json().catch(() => ({}))) as { sid?: string; status?: string };
     console.log("[paper-cuts:twilio]", SMS_TARGET, data.sid ?? "", data.status ?? "");
-    return { status: "sent" };
+    return { status: "sent", via: "twilio" };
   } catch (err) {
     console.error("[paper-cuts:twilio]", err);
-    return { status: "failed", detail: "twilio_unreachable" };
+    return { status: "failed", via: "twilio", detail: "twilio_unreachable" };
   }
 }
 
@@ -162,7 +166,7 @@ function emailHtml(lead: Lead): string {
       <ul style="list-style:none;padding:0;margin:12px 0 0;">${rows}</ul>
     </div>
     <div style="background:#f5f3ea;padding:14px;text-align:center;color:#6b7280;font-size:12px;">
-      Sent from ${esc(SITE.url)} &middot; reply directly to this address to reach the customer by phone.
+      Sent from ${esc(SITE.url)} &middot; call or text the customer back at ${esc(lead.phone)}.
     </div>
   </div>`;
 }
@@ -183,13 +187,24 @@ function emailText(lead: Lead): string {
   ].join("\n");
 }
 
-async function sendEmail(lead: Lead): Promise<Channel> {
-  const apiKey = process.env.RESEND_API_KEY;
-  const to = process.env.QUOTE_TO_EMAIL || SITE.email;
+function emailSubject(lead: Lead): string {
+  return `New estimate request: ${lead.name} (${lead.address})${
+    lead.photos.length ? ` [${lead.photos.length} photo${lead.photos.length === 1 ? "" : "s"}]` : ""
+  }`;
+}
+
+async function emailAttachments(lead: Lead) {
+  return Promise.all(
+    lead.photos.map(async (file) => ({
+      filename: file.name || "yard-photo.jpg",
+      content: Buffer.from(await file.arrayBuffer()),
+    })),
+  );
+}
+
+async function sendViaResend(lead: Lead, to: string): Promise<Channel> {
+  const apiKey = process.env.RESEND_API_KEY as string;
   const from = process.env.QUOTE_FROM_EMAIL || "Paper Cuts Lawn Care <onboarding@resend.dev>";
-
-  if (!apiKey) return { status: "not_configured" };
-
   const attachments = await Promise.all(
     lead.photos.map(async (file) => ({
       filename: file.name || "yard-photo.jpg",
@@ -203,15 +218,12 @@ async function sendEmail(lead: Lead): Promise<Channel> {
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
+        "User-Agent": "paper-cuts-lawn-care/1.0",
       },
       body: JSON.stringify({
         from,
         to: [to],
-        subject: `New estimate request: ${lead.name} (${lead.address})${
-          lead.photos.length
-            ? ` [${lead.photos.length} photo${lead.photos.length === 1 ? "" : "s"}]`
-            : ""
-        }`,
+        subject: emailSubject(lead),
         html: emailHtml(lead),
         text: emailText(lead),
         attachments,
@@ -221,14 +233,81 @@ async function sendEmail(lead: Lead): Promise<Channel> {
     if (!res.ok) {
       const detail = await res.text();
       console.error("[paper-cuts:resend]", res.status, detail.slice(0, 500));
-      return { status: "failed", detail: `resend_${res.status}` };
+      return { status: "failed", via: "resend", detail: `resend_${res.status}` };
     }
 
-    return { status: "sent" };
+    return { status: "sent", via: "resend" };
   } catch (err) {
     console.error("[paper-cuts:resend]", err);
-    return { status: "failed", detail: "resend_unreachable" };
+    return { status: "failed", via: "resend", detail: "resend_unreachable" };
   }
+}
+
+/**
+ * Gmail app-password delivery: no ESP account, no domain verification, sends to
+ * any recipient. App passwords require 2-Step Verification on the Google account.
+ */
+async function sendViaGmail(lead: Lead, to: string): Promise<Channel> {
+  const user = process.env.GMAIL_USER as string;
+  const pass = process.env.GMAIL_APP_PASSWORD as string;
+  const fromName = process.env.QUOTE_FROM_NAME || SITE.name;
+
+  try {
+    const transport = nodemailer.createTransport({
+      host: "smtp.gmail.com",
+      port: 465,
+      secure: true,
+      auth: { user, pass },
+      connectionTimeout: 10_000,
+      greetingTimeout: 10_000,
+      socketTimeout: 20_000,
+    });
+
+    const info = await transport.sendMail({
+      from: `"${fromName}" <${user}>`,
+      to,
+      subject: emailSubject(lead),
+      html: emailHtml(lead),
+      text: emailText(lead),
+      replyTo: user,
+      attachments: await emailAttachments(lead),
+    });
+
+    transport.close();
+    console.log("[paper-cuts:gmail]", info.messageId ?? "", info.accepted?.length ?? 0);
+    if (!info.accepted || info.accepted.length === 0) {
+      return { status: "failed", via: "gmail", detail: "gmail_not_accepted" };
+    }
+    return { status: "sent", via: "gmail" };
+  } catch (err) {
+    console.error("[paper-cuts:gmail]", err);
+    const code = (err as { code?: string }).code ?? "gmail_error";
+    return { status: "failed", via: "gmail", detail: code };
+  }
+}
+
+/**
+ * Provider chain. First configured transport that accepts the message wins;
+ * a configured transport that fails is reported, never silently swallowed.
+ */
+async function sendEmail(lead: Lead): Promise<Channel> {
+  const to = process.env.QUOTE_TO_EMAIL || SITE.email;
+  const attempts: Channel[] = [];
+
+  if (process.env.RESEND_API_KEY) {
+    const res = await sendViaResend(lead, to);
+    if (res.status === "sent") return res;
+    attempts.push(res);
+  }
+
+  if (process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD) {
+    const res = await sendViaGmail(lead, to);
+    if (res.status === "sent") return res;
+    attempts.push(res);
+  }
+
+  if (attempts.length === 0) return { status: "not_configured", via: "email" };
+  return { ...attempts[0], detail: attempts.map((a) => a.detail).filter(Boolean).join(",") };
 }
 
 export async function POST(request: Request) {
@@ -324,7 +403,6 @@ export async function POST(request: Request) {
       }),
     );
 
-    // Text first (James reads texts on the job), email second (carries the photos).
     const [sms, email] = await Promise.all([sendSms(lead), sendEmail(lead)]);
     console.log("[paper-cuts:delivery]", JSON.stringify({ sms, email }));
 
@@ -347,7 +425,7 @@ export async function POST(request: Request) {
     }
 
     return NextResponse.json(
-      { ok: true, delivered: true, sms: sms.status, email: email.status },
+      { ok: true, delivered: true, sms: sms.status, email: email.status, via: email.via ?? sms.via },
       { status: 200 },
     );
   } catch (err) {
