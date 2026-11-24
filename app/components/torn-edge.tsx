@@ -1,0 +1,26 @@
+const TORN_PATH =
+  "M0,40 L0,12 L0,20 L24,17 L48,26 L72,17 L96,11 L120,15 L144,9 L168,15 L192,6 L216,10 L240,10 L264,3 L288,3 L312,12 L336,21 L360,15 L384,15 L408,9 L432,13 L456,22 L480,13 L504,7 L528,7 L552,3 L576,12 L600,3 L624,3 L648,3 L672,7 L696,4 L720,7 L744,16 L768,13 L792,17 L816,11 L840,14 L864,18 L888,15 L912,9 L936,9 L960,15 L984,9 L1008,13 L1032,7 L1056,3 L1080,3 L1104,3 L1128,7 L1152,16 L1176,22 L1200,12 L1200,40 Z";
+
+export function TornEdge({
+  className = "",
+  flip = false,
+}: {
+  className?: string;
+  flip?: boolean;
+}) {
+  return (
+    <div
+      aria-hidden
+      className={`pointer-events-none w-full ${className}`}
+      style={flip ? { transform: "rotate(180deg)" } : undefined}
+    >
+      <svg
+        viewBox="0 0 1200 40"
+        preserveAspectRatio="none"
+        className="block h-full w-full"
+      >
+        <path fill="currentColor" d={TORN_PATH} />
+      </svg>
+    </div>
+  );
+}

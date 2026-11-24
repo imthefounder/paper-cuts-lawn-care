@@ -1,0 +1,113 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+  html {
+    scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
+    scroll-padding-top: 5.5rem;
+  }
+  body {
+    @apply bg-ink-950 font-sans text-paper antialiased;
+  }
+  ::selection {
+    @apply bg-grass-400 text-ink-950;
+  }
+  h1, h2, h3 {
+    text-wrap: balance;
+  }
+  :focus-visible {
+    @apply outline-none ring-2 ring-grass-400 ring-offset-2 ring-offset-ink-950;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    *, *::before, *::after {
+      animation-duration: 0.001ms !important;
+      transition-duration: 0.001ms !important;
+    }
+  }
+}
+
+@layer components {
+  .wrap {
+    @apply mx-auto w-full max-w-6xl px-5 sm:px-8;
+  }
+  .display {
+    @apply font-display uppercase leading-[0.95] tracking-[-0.015em];
+  }
+  .eyebrow {
+    @apply inline-flex items-center gap-2 text-[11px] font-extrabold uppercase tracking-[0.22em] text-grass-400;
+  }
+  .eyebrow::before {
+    content: "";
+    @apply block h-[2px] w-7 bg-grass-500;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-xl px-6 py-3.5 text-[13px] font-extrabold uppercase tracking-[0.08em] transition duration-150;
+  }
+  .btn-gold {
+    @apply btn bg-gold-500 text-ink-950;
+    box-shadow: 0 5px 0 0 #8a6d04;
+  }
+  .btn-gold:hover {
+    @apply bg-gold-400;
+    transform: translateY(2px);
+    box-shadow: 0 3px 0 0 #8a6d04;
+  }
+  .btn-gold:active {
+    transform: translateY(5px);
+    box-shadow: 0 0 0 0 #8a6d04;
+  }
+  .btn-grass {
+    @apply btn bg-grass-500 text-ink-950;
+    box-shadow: 0 5px 0 0 #33540e;
+  }
+  .btn-grass:hover {
+    @apply bg-grass-400;
+    transform: translateY(2px);
+    box-shadow: 0 3px 0 0 #33540e;
+  }
+  .btn-grass:active {
+    transform: translateY(5px);
+    box-shadow: 0 0 0 0 #33540e;
+  }
+  .btn-ghost {
+    @apply btn border border-white/20 bg-white/5 text-paper backdrop-blur hover:border-grass-400/70 hover:bg-white/10;
+  }
+  .field {
+    @apply w-full rounded-xl border border-white/15 bg-ink-950/70 px-4 py-3 text-[15px] text-paper outline-none transition placeholder:text-white/30;
+  }
+  .field:focus {
+    @apply border-grass-400;
+    box-shadow: 0 0 0 3px rgba(132, 192, 42, 0.12);
+  }
+  .label {
+    @apply mb-1.5 block text-[10.5px] font-extrabold uppercase tracking-[0.16em] text-white/55;
+  }
+  .card {
+    @apply rounded-2xl border border-white/10 bg-ink-900/70;
+  }
+  .lawn {
+    background-color: #33540e;
+    background-image:
+      repeating-linear-gradient(102deg, rgba(255, 255, 255, 0.075) 0 38px, rgba(0, 0, 0, 0.15) 38px 76px),
+      linear-gradient(180deg, #4e7d12, #33540e 55%, #1c3009);
+  }
+  .paper-grain {
+    background-image: radial-gradient(rgba(8, 11, 9, 0.06) 1px, transparent 1px);
+    background-size: 4px 4px;
+  }
+  .rule-dashed {
+    @apply border-t border-dashed border-white/15;
+  }
+}
+
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+  .safe-bottom { padding-bottom: max(0.75rem, env(safe-area-inset-bottom)); }
+}
